@@ -69,7 +69,7 @@ $ /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' …
 ```
 $ ./ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics
 Chrome Profiles 诊断报告
-版本：1.0.0
+版本：1.0.1
 系统：Version 15.8.2 (Build 24H232)
 
 == 配置根目录
@@ -101,22 +101,22 @@ Chrome Profiles 诊断报告
 
 另外确认：
 
-- 菜单栏出现应用图标，Dock 中无图标，无主窗口
+- 菜单栏出现应用图标（20pt 画布，图形高度约 17.6pt，与系统图标相当），Dock 中无图标，无主窗口
 - 已存在的 5 个示例目录被自动识别（未写死名称）
 - 当某个配置正被 Chrome 使用时会显示「● 运行中」并禁用复制/删除（见提交记录中的诊断输出）
 
 ## 分发产物
 
 ```
-dist/ChromeProfiles-1.0.0-universal.zip    1.7 MB
-dist/ChromeProfiles-1.0.0-universal.dmg    1.9 MB
+dist/ChromeProfiles-1.0.1-universal.zip    1.7 MB
+dist/ChromeProfiles-1.0.1-universal.dmg    1.9 MB
 dist/SHA256SUMS.txt
 ```
 
 DMG 实测：
 
 ```
-$ hdiutil verify dist/ChromeProfiles-1.0.0-universal.dmg
+$ hdiutil verify dist/ChromeProfiles-1.0.1-universal.dmg
 checksum ... is VALID
 
 $ hdiutil attach … && ls /Volumes/…

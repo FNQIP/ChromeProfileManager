@@ -26,7 +26,7 @@ shasum -a 256 -c SHA256SUMS.txt
 （只有下载了同一目录下的两个分发包时，`-c` 才会同时校验；也可以手工比对：
 
 ```bash
-shasum -a 256 ChromeProfiles-1.0.0-universal.dmg
+shasum -a 256 ChromeProfiles-1.0.1-universal.dmg
 ```）
 
 ## 4. 用 DMG 安装
