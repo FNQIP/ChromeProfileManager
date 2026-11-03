@@ -171,9 +171,12 @@ Scripts/
 
 ## 持续集成与发布
 
-- `.github/workflows/ci.yml`：在 `macos-14`、`macos-15`、`macos-15-intel` 上跑单元测试；在 `macos-15` 上构建 Universal Binary，校验 `lipo`/`vtool`/签名，生成 ZIP + DMG + SHA256SUMS，并在 `macos-13` 上用构建产物做冒烟测试。
+- `.github/workflows/ci.yml`（每次推送 / PR）：`macos-15`（arm64）与 `macos-15-intel`（x64）跑单元测试 → `macos-15` 构建 Universal Binary 并校验 `lipo`/`vtool`/签名/ZIP/DMG/SHA256 → `macos-14` 用构建产物做冒烟。
+- `.github/workflows/compat.yml`（每周一 03:00 UTC + 手动）：在 `macos-26` 上跑完整测试与构建，覆盖更新的系统。
 - `.github/workflows/release.yml`：推送 `v*.*.*` tag 触发，重新跑测试与正式构建，上传 `zip`、`dmg`、`SHA256SUMS.txt` 三个附件到 GitHub Releases。
 - 工作流只声明最小必要权限（`contents: read` / `contents: write`），不配置任何 Apple 证书、账号或公证凭据。
+
+> **为什么把 macOS 26 拆成独立工作流**：GitHub 的较新 arm64 Runner 产能紧张，`macos-26` 经常排队 5～10 分钟，实际执行只要一两分钟。放在每次推送的矩阵里会显著拉长 CI 墙钟时间，因此改为定时跑。
 
 ## 已知限制
 

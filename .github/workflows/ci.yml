@@ -15,15 +15,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 多版本 macOS + 双架构跑单元测试
+  # 双架构（arm64 + x64）跑单元测试。
+  #
+  # 这里只放「排队快」的镜像：macos-26 等新版本 arm64 Runner 产能紧张，
+  # 经常排队 5～10 分钟，会把每次推送的 CI 拖长。macOS 26 的兼容性验证
+  # 放在 compat.yml（每周定时 + 手动触发），不阻塞日常提交。
   test:
     name: 单元测试 (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        # 官方可用镜像：macos-15 / macos-26 为 arm64，macos-15-intel 为 x64。
-        os: [macos-15, macos-26, macos-15-intel]
+        os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -64,6 +68,7 @@ jobs:
     name: Universal 构建与打包
     needs: test
     runs-on: macos-15
+    timeout-minutes: 40
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -157,6 +162,7 @@ jobs:
     name: 旧系统冒烟 (macOS 14)
     needs: build-universal
     runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - name: 下载构建产物
         uses: actions/download-artifact@v4

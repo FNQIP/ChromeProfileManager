@@ -1,0 +1,56 @@
+name: Compatibility
+
+# 新版本 macOS 的兼容性验证。
+#
+# 为什么不放在每次推送的 CI 里：macos-26 等较新的 arm64 Runner 产能紧张，
+# 常常排队 5～10 分钟，会把日常 CI 拖到我无法忍受的长度。这里改成每周定时
+# 跑一次 + 手动触发，既保留多版本覆盖，又不阻塞提交。
+on:
+  schedule:
+    # 每周一 03:00 UTC（北京时间 11:00）
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-newest-macos:
+    name: 单元测试 (macos-26)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 选择并检查 Xcode
+        run: |
+          set -Eeuo pipefail
+          trap 'echo "::error::Xcode 步骤失败：行 ${LINENO}，命令 ${BASH_COMMAND}"' ERR
+          if ! APP="$(./Scripts/select-xcode.sh)"; then
+            echo "::error::select-xcode.sh 未能选出可用 Xcode（详见上方日志）"
+            exit 1
+          fi
+          echo "使用 Xcode：${APP}"
+          sudo xcode-select -s "${APP}"
+          xcode-select -p
+          xcodebuild -version
+          sw_vers
+          swift --version
+
+      - name: 单元测试
+        run: swift test --parallel
+
+      - name: 构建并检查 Universal 产物
+        env:
+          CPM_BUILD_BACKEND: auto
+        run: ./Scripts/build-app.sh
+
+      - name: 校验架构与最低系统
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+          lipo -archs "$BIN" | tr ' ' '\n' | grep -qx x86_64
+          lipo -archs "$BIN" | tr ' ' '\n' | grep -qx arm64
+          vtool -show-build "$BIN" | grep -c "minos 12.0" | grep -qx 2
+          ./build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics | head -12
