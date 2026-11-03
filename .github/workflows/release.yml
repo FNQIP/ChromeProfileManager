@@ -33,37 +33,26 @@ jobs:
       - name: 选择并检查 Xcode
         run: |
           set -euo pipefail
-          # 各镜像默认 Xcode 不同（macos-14 默认是 15.4，不带 swift-testing），
-          # 因此挑选版本最高且自带 Swift 6 的 Xcode。
-          APP=$(python3 - <<'PY'
-          import glob, re, subprocess
-          apps = glob.glob('/Applications/Xcode*.app')
-          def version(path):
-              m = re.search(r'Xcode_([0-9.]+)\.app$', path)
-              return tuple(int(x) for x in m.group(1).split('.')) if m else (0,)
-          apps.sort(key=version, reverse=True)
-          for app in apps:
-              try:
-                  out = subprocess.run([app + '/Contents/Developer/usr/bin/swift', '--version'],
-                                       capture_output=True, text=True, timeout=30).stdout
-              except Exception:
-                  continue
-              if 'Swift version 6' in out:
-                  print(app)
-                  break
-          PY
-          )
-          if [ -z "$APP" ]; then
-            echo "错误：没有找到自带 Swift 6 的 Xcode（测试需要 swift-testing）。" >&2
-            ls -d /Applications/Xcode*.app || true
+          # 选第一个自带 Swift 6 的 Xcode（单元测试需要 swift-testing）。
+          APP=""
+          for candidate in /Applications/Xcode.app /Applications/Xcode_*.app; do
+            [ -d "${candidate}" ] || continue
+            swift_bin="${candidate}/Contents/Developer/usr/bin/swift"
+            [ -x "${swift_bin}" ] || continue
+            if "${swift_bin}" --version 2>/dev/null | grep -q "Swift version 6"; then
+              APP="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${APP}" ]; then
+            echo "错误：没有找到自带 Swift 6 的 Xcode。" >&2
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
             exit 1
           fi
-          echo "使用 Xcode：$APP"
-          sudo xcode-select -s "$APP"
+          echo "使用 Xcode：${APP}"
+          sudo xcode-select -s "${APP}"
           xcode-select -p
           xcodebuild -version
-          sw_vers
-          echo "host arch: $(uname -m)"
           swift --version
 
       - name: 计算版本号
