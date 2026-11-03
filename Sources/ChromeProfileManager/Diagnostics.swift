@@ -53,6 +53,18 @@ enum Diagnostics {
             print(line)
         }
 
+        // 构建一次偏好设置窗口，确认布局没有异常（不显示）。
+        print("")
+        print("== 偏好设置窗口")
+        let preferencesWindow = PreferencesWindowController(preferences: preferences,
+                                                            onRootChanged: {})
+        if let window = preferencesWindow.window {
+            window.layoutIfNeeded()
+            print("构建成功，尺寸 \(Int(window.frame.width))×\(Int(window.frame.height))")
+        } else {
+            print("构建失败：没有窗口")
+        }
+
         exit(0)
     }
 }
