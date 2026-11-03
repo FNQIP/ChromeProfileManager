@@ -1,0 +1,104 @@
+name: Release
+
+# 推送语义化版本 tag（例如 v1.0.0）时重新测试、构建并发布。
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（例如 v1.0.0），需已存在"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 测试、构建并发布 Intel 版本
+    runs-on: macos-15-intel
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 环境检查
+        run: |
+          sw_vers
+          echo "host arch: $(uname -m)"
+          swift --version
+          xcode-select -p
+
+      - name: 确定版本号
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag 必须是 v主版本.次版本.修订版本 的形式，当前为 $TAG" >&2
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # 发布前重新跑测试，避免发出未经验证的产物。
+      - name: 单元测试
+        run: swift test
+
+      - name: 正式构建（x86_64）
+        run: CPM_VERSION="$VERSION" CPM_BUILD_NUMBER="${{ github.run_number }}" ./Scripts/build-app.sh
+
+      - name: 架构与元数据校验
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager
+          ARCHS=$(lipo -archs "$BIN")
+          echo "lipo -archs: $ARCHS"
+          echo "$ARCHS" | grep -qw x86_64
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/ChromeProfileManager.app/Contents/Info.plist | grep -qx "$VERSION"
+          codesign --verify --deep --strict build/ChromeProfileManager.app
+
+      - name: 生成发布说明
+        run: |
+          set -euo pipefail
+          SHA=$(cut -d' ' -f1 "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256")
+          cat > RELEASE_NOTES.md <<EOF
+          Chrome Profile Manager ${VERSION}
+
+          - 架构：Intel x86_64（ad-hoc 签名，未公证）
+          - 最低系统：macOS 13 Ventura
+          - 适用于稳定版 Google Chrome
+
+          ## 安装
+
+          1. 下载 \`ChromeProfileManager-${VERSION}-macOS-x86_64.zip\` 并解压
+          2. 把 \`ChromeProfileManager.app\` 拖入「应用程序」
+          3. 首次打开若被拦截，到「系统设置 → 隐私与安全性」点「仍要打开」
+
+          详细步骤见仓库中的 docs/INSTALL.md，常见问题见 docs/TROUBLESHOOTING.md。
+
+          ## 校验下载
+
+          \`\`\`
+          shasum -a 256 -c ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256
+          \`\`\`
+
+          SHA-256：\`${SHA}\`
+
+          > 本应用未使用 Apple Developer ID 签名，也未公证，因此首次打开需要手动放行一次。请勿为此全局关闭 Gatekeeper。
+          EOF
+          cat RELEASE_NOTES.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发布到 GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip" \
+            "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256" \
+            --title "Chrome Profile Manager ${VERSION}" \
+            --notes-file RELEASE_NOTES.md

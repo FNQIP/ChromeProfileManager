@@ -1,0 +1,25 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# 构建与分发产物
+build/
+dist/
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# 编辑器
+.vscode/
+.idea/
+*.xcodeproj
+xcuserdata/
+
+# 本地配置与凭据（不应提交任何签名或账号信息）
+*.p12
+*.mobileprovision
+.env

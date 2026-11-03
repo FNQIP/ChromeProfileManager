@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: 测试与 Intel 构建
+    # Intel Runner：官方标签 macos-15-intel（备选 macos-26-intel）。
+    runs-on: macos-15-intel
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 环境检查
+        run: |
+          sw_vers
+          echo "host arch: $(uname -m)"
+          swift --version
+          xcode-select -p
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: 依赖解析
+        run: swift package resolve
+
+      - name: 单元测试
+        run: swift test
+
+      - name: Release 构建与 .app 组装
+        run: ./Scripts/build-app.sh
+
+      - name: 架构与 Bundle 校验
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager
+          ARCHS=$(lipo -archs "$BIN")
+          echo "lipo -archs: $ARCHS"
+          echo "$ARCHS" | grep -qw x86_64
+          MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfileManager.app/Contents/Info.plist)
+          echo "LSMinimumSystemVersion: $MIN_OS"
+          [ "$MIN_OS" = "13.0" ]
+          /usr/libexec/PlistBuddy -c 'Print :LSUIElement' build/ChromeProfileManager.app/Contents/Info.plist | grep -qw true
+          codesign --verify --deep --strict build/ChromeProfileManager.app
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChromeProfileManager-x86_64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 构建摘要
+        run: |
+          {
+            echo "### 构建结果"
+            echo ""
+            echo "- 架构：$(lipo -archs build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager)"
+            echo "- 最低系统：$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfileManager.app/Contents/Info.plist)"
+            echo "- 体积：$(du -sh build/ChromeProfileManager.app | cut -f1)"
+            echo "- SHA256：$(cut -d' ' -f1 dist/*.sha256)"
+          } >> "$GITHUB_STEP_SUMMARY"
