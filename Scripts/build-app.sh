@@ -88,7 +88,9 @@ echo "==> 打包"
 if [ -z "${CPM_SKIP_ZIP:-}" ]; then
     mkdir -p "${DIST_DIR}"
     rm -f "${DIST_DIR}/${ZIP_NAME}" "${DIST_DIR}/${ZIP_NAME}.sha256"
-    ditto -c -k --sequesterRsrc --keepParent "${BUNDLE}" "${DIST_DIR}/${ZIP_NAME}"
+    # --norsrc --noextattr 避免在 ZIP 中产生 __MACOSX 冗余目录；ad-hoc 签名
+    # 存放在 Mach-O 内，解压后 codesign 校验仍然通过。
+    ditto -c -k --keepParent --norsrc --noextattr "${BUNDLE}" "${DIST_DIR}/${ZIP_NAME}"
     ( cd "${DIST_DIR}" && shasum -a 256 "${ZIP_NAME}" > "${ZIP_NAME}.sha256" )
     echo "ZIP: ${DIST_DIR}/${ZIP_NAME}"
     echo "SHA256: $(cat "${DIST_DIR}/${ZIP_NAME}.sha256")"

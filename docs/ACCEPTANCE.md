@@ -92,7 +92,7 @@ lipo -archs: x86_64
 LSMinimumSystemVersion = 13.0, LSUIElement = true
 签名：ad-hoc（codesign -s -），无开发者证书、无公证
 应用体积：2.5 MB
-ZIP SHA-256：706b2ea76a4849188ee73cdf44508c176f3d5f04a5695cb66e34a76b13b60a4f
+ZIP SHA-256：143069c684255239b7eec2a2c71f6c1cf50c5f8b88399ef8c372f852156a7ad1
 ```
 
 ## 资源占用（空闲 3 秒采样）
