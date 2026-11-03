@@ -33,22 +33,7 @@ jobs:
       - name: 选择并检查 Xcode
         run: |
           set -euo pipefail
-          # 选第一个自带 Swift 6 的 Xcode（单元测试需要 swift-testing）。
-          APP=""
-          for candidate in /Applications/Xcode.app /Applications/Xcode_*.app; do
-            [ -d "${candidate}" ] || continue
-            swift_bin="${candidate}/Contents/Developer/usr/bin/swift"
-            [ -x "${swift_bin}" ] || continue
-            if "${swift_bin}" --version 2>/dev/null | grep -q "Swift version 6"; then
-              APP="${candidate}"
-              break
-            fi
-          done
-          if [ -z "${APP}" ]; then
-            echo "错误：没有找到自带 Swift 6 的 Xcode。" >&2
-            ls -d /Applications/Xcode*.app 2>/dev/null || true
-            exit 1
-          fi
+          APP="$(./Scripts/select-xcode.sh)"
           echo "使用 Xcode：${APP}"
           sudo xcode-select -s "${APP}"
           xcode-select -p
