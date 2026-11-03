@@ -34,7 +34,7 @@ public enum ProfileServiceError: LocalizedError, Equatable {
     }
 }
 
-public struct ProfileEntry: Equatable {
+public struct ProfileEntry: Equatable, Sendable {
     public let profile: Profile
     public let state: ProfileRunningState
 
@@ -76,6 +76,55 @@ public struct MenuSnapshot {
     public var hasChrome: Bool { chromeInstallation != nil }
 }
 
+/// 一次扫描的原始结果：目录列表、每个配置的运行状态、Chrome 定位结果。
+///
+/// 拆开保存是为了让界面可以「同步列举目录 + 缓存运行状态 + 后台刷新状态」，
+/// 既保证打开菜单时目录信息是最新的，又不必在主线程等待进程扫描。
+public struct ScanResult {
+    public let rootURL: URL
+    public let profiles: [Profile]
+    public let rootError: String?
+    public let states: [String: ProfileRunningState]
+    public let processListingError: String?
+    public let chromeInstallation: ChromeInstallation?
+    public let chromeError: String?
+
+    public init(rootURL: URL,
+                profiles: [Profile],
+                rootError: String? = nil,
+                states: [String: ProfileRunningState] = [:],
+                processListingError: String? = nil,
+                chromeInstallation: ChromeInstallation? = nil,
+                chromeError: String? = nil) {
+        self.rootURL = rootURL
+        self.profiles = profiles
+        self.rootError = rootError
+        self.states = states
+        self.processListingError = processListingError
+        self.chromeInstallation = chromeInstallation
+        self.chromeError = chromeError
+    }
+
+    /// 没有缓存状态时：进程表可读则视为未运行；进程表不可读则保守为未知。
+    public func state(for profile: Profile) -> ProfileRunningState {
+        if let state = states[profile.path] { return state }
+        if let processListingError { return .unknown(reason: processListingError) }
+        return .notRunning
+    }
+
+    public func snapshot() -> MenuSnapshot {
+        let entries = profiles.map { profile in
+            ProfileEntry(profile: profile, state: state(for: profile))
+        }
+        return MenuSnapshot(rootURL: rootURL,
+                            entries: entries,
+                            chromeInstallation: chromeInstallation,
+                            rootError: rootError,
+                            chromeError: chromeError,
+                            processListingError: processListingError)
+    }
+}
+
 public enum OpenProfileResult: Equatable {
     case launched(pid: Int32)
     case alreadyRunning(pids: [Int32])
@@ -83,7 +132,7 @@ public enum OpenProfileResult: Equatable {
 
 /// Orchestrates the pieces: directory store, Chrome lookup, launch and the
 /// running-state check. Every mutation re-checks the running state first.
-public final class ProfileService {
+public final class ProfileService: @unchecked Sendable {
 
     public let store: ProfileStore
     private let locator: ChromeLocating
@@ -105,53 +154,68 @@ public final class ProfileService {
 
     public var rootURL: URL { store.rootURL }
 
-    // MARK: - Snapshot
+    // MARK: - Scanning
 
-    /// One pass over the filesystem and the process table, used to build the
-    /// menu. Called only when the menu opens or after a user action.
-    public func snapshot() -> MenuSnapshot {
-        var profiles: [Profile] = []
-        var rootError: String?
+    /// 目录列举只做一次 readdir，开销很小，因此每次打开菜单都同步执行，
+    /// 保证外部新建/删除/重命名的目录立刻可见。
+    public func listProfiles() -> (profiles: [Profile], error: String?) {
+        do {
+            return (try store.listProfiles(), nil)
+        } catch {
+            return ([], Self.describe(error))
+        }
+    }
+
+    /// 遍历一次进程表，按配置路径返回运行状态。开销较大（每个进程一次
+    /// sysctl），调用方应放在后台队列执行。
+    public func scanRunningStates(for profiles: [Profile])
+        -> (states: [String: ProfileRunningState], error: String?) {
 
         do {
-            profiles = try store.listProfiles()
-        } catch {
-            rootError = Self.describe(error)
-        }
-
-        var processes: [ProcessSnapshot] = []
-        var listingError: String?
-
-        do {
-            processes = try processLister.snapshot()
-        } catch {
-            listingError = Self.describe(error)
-        }
-
-        let entries = profiles.map { profile -> ProfileEntry in
-            let state: ProfileRunningState
-            if listingError != nil {
-                state = .unknown(reason: listingError ?? "无法读取进程列表。")
-            } else {
-                state = ChromeUsageDetector.state(for: profile, in: processes)
+            let snapshot = try processLister.snapshot()
+            var states: [String: ProfileRunningState] = [:]
+            states.reserveCapacity(profiles.count)
+            for profile in profiles {
+                states[profile.path] = ChromeUsageDetector.state(for: profile, in: snapshot)
             }
-            return ProfileEntry(profile: profile, state: state)
-        }
-
-        var chrome: ChromeInstallation?
-        var chromeError: String?
-        do {
-            chrome = try locator.locate()
+            return (states, nil)
         } catch {
-            chromeError = Self.describe(error)
+            let message = Self.describe(error)
+            var states: [String: ProfileRunningState] = [:]
+            states.reserveCapacity(profiles.count)
+            for profile in profiles {
+                states[profile.path] = .unknown(reason: message)
+            }
+            return (states, message)
         }
+    }
 
-        return MenuSnapshot(rootURL: store.rootURL,
-                            entries: entries,
-                            chromeInstallation: chrome,
-                            rootError: rootError,
-                            chromeError: chromeError,
-                            processListingError: listingError)
+    public func chromeStatus() -> (installation: ChromeInstallation?, error: String?) {
+        do {
+            return (try locator.locate(), nil)
+        } catch {
+            return (nil, Self.describe(error))
+        }
+    }
+
+    /// 完整同步扫描：目录 + 进程 + Chrome。用于测试、诊断与首次打开菜单。
+    public func scan() -> ScanResult {
+        let listing = listProfiles()
+        let states = scanRunningStates(for: listing.profiles)
+        let chrome = chromeStatus()
+
+        return ScanResult(rootURL: store.rootURL,
+                          profiles: listing.profiles,
+                          rootError: listing.error,
+                          states: states.states,
+                          processListingError: states.error,
+                          chromeInstallation: chrome.installation,
+                          chromeError: chrome.error)
+    }
+
+    /// 一次完整的同步快照，等价于 `scan().snapshot()`。
+    public func snapshot() -> MenuSnapshot {
+        scan().snapshot()
     }
 
     public func runningState(for profile: Profile) -> ProfileRunningState {

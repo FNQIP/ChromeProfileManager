@@ -2,12 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "ChromeProfileManager",
+    name: "ChromeProfiles",
     platforms: [
-        .macOS(.v13)
+        // Deployment target for the app; also passed to swiftc via --triple,
+        // and to xcodebuild via MACOSX_DEPLOYMENT_TARGET in CI.
+        .macOS(.v12)
     ],
     products: [
-        .executable(name: "ChromeProfileManager", targets: ["ChromeProfileManager"]),
+        .executable(name: "ChromeProfiles", targets: ["ChromeProfiles"]),
         .library(name: "ProfileKit", targets: ["ProfileKit"]),
         .library(name: "ProfileUI", targets: ["ProfileUI"])
     ],
@@ -26,9 +28,9 @@ let package = Package(
         ),
         // Thin AppKit shell: status item, menus, dialogs.
         .executableTarget(
-            name: "ChromeProfileManager",
+            name: "ChromeProfiles",
             dependencies: ["ProfileKit", "ProfileUI"],
-            path: "Sources/ChromeProfileManager"
+            path: "Sources/ChromeProfiles"
         ),
         // Developer-only acceptance harness. Launches a real Chrome instance
         // against a temporary profile and is never part of the app bundle.

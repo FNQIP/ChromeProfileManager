@@ -9,14 +9,15 @@
 | 工具链 | Apple Swift 6.1.2，仅 Command Line Tools（`/Library/Developer/CommandLineTools`） |
 | SDK | MacOSX 15.5 |
 | Chrome | 稳定版，`/Applications/Google Chrome.app` |
-| 构建目标 | `x86_64-apple-macosx13.0` |
-| 是否使用 Xcode / xcodebuild | 否 |
+| 构建目标 | `x86_64 + arm64`，`macosx12.0` |
+| 构建后端（本机） | SwiftPM 双架构 + `lipo`（本机无完整 Xcode） |
+| 构建后端（CI） | `xcodebuild`（存在失败回退到 SwiftPM） |
 
 ## 自动化测试
 
 ```
 $ swift test
-✔ Test run with 84 tests passed
+✔ Test run with 91 tests passed
 ```
 
 覆盖范围：
@@ -28,6 +29,7 @@ $ swift test
 - 删除：移出根目录、目录缺失、根目录外拒绝
 - 启动参数：中文、空格、`&`、引号、日文、`%`、`#` 均为单个 argv 元素；末尾斜杠规范化；不含 shell 拼接
 - 进程匹配：`sysctl` 缓冲区解析、中文参数、含空格路径、只读声明数量的 argv、`我` 与 `我（副）` 不混淆、忽略默认目录实例、忽略非 Chrome 进程、辅助进程识别、多进程聚合、`--flag value` 写法
+- 分步扫描：目录列举不触发进程扫描、状态按路径返回、进程表不可读时全部未知、缓存缺失的两种降级
 - 服务层：运行中禁止复制/删除、状态未知时保守拒绝、未运行时允许、已运行不再启动、Chrome 缺失提示、目录消失提示、启动失败保留数据
 - 菜单模型：空状态、排序、运行中禁用规则、表头统计、Chrome 缺失警告、根目录错误抑制空状态、警告顺序、命令顺序与快捷键
 
@@ -48,27 +50,42 @@ $ swift run -c release IntegrationCheck
 - 退出后状态回到「未运行」，可正常复制
 - 整个过程中未修改 `~/ChromeProfiles` 中的任何数据
 
+## Universal Binary 验证
+
+```
+$ lipo -archs build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+x86_64 arm64
+
+$ vtool -show-build build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+… (architecture x86_64):  platform MACOS  minos 12.0  sdk 15.5
+… (architecture arm64):   platform MACOS  minos 12.0  sdk 15.5
+
+$ /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' …
+12.0
+```
+
 ## 运行时验证（本机）
 
 ```
-$ ./ChromeProfileManager --diagnostics
-Chrome Profile Manager 诊断报告
+$ ./ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics
+Chrome Profiles 诊断报告
+版本：1.0.0
 系统：Version 15.8.2 (Build 24H232)
 
 == 配置根目录
 /Users/<user>/ChromeProfiles（默认）
-配置数量：5，运行中：1
+配置数量：5，运行中：0
 
 == Chrome
 /Applications/Google Chrome.app
 
 == 菜单项（与打开菜单时一致）
-  Chrome Profile Manager / 5 个配置 · 1 个运行中 [禁用]
+  Chrome Profiles / 5 个配置 · 0 个运行中 [禁用]
   ──────────
   姐 [可点] ▸ 打开 Chrome | 在访达中显示 | 复制到新配置… | 移入废纸篓…
   老爸 [可点] ▸ 打开 Chrome | 在访达中显示 | 复制到新配置… | 移入废纸篓…
   老妈 [可点] ▸ 打开 Chrome | 在访达中显示 | 复制到新配置… | 移入废纸篓…
-  ● 我   运行中 [可点] ▸ 已在运行(禁用) | 在访达中显示 | 复制到新配置…(禁用) | 移入废纸篓…(禁用)
+  我 [可点] ▸ 打开 Chrome | 在访达中显示 | 复制到新配置… | 移入废纸篓…
   我（副） [可点] ▸ 打开 Chrome | 在访达中显示 | 复制到新配置… | 移入废纸篓…
   ──────────
   新建配置… [可点]
@@ -76,30 +93,46 @@ Chrome Profile Manager 诊断报告
   打开配置根目录 [可点]
   偏好设置… [可点]
   ──────────
-  退出 Chrome Profile Manager [可点]
+  退出 Chrome Profiles [可点]
+
+== 偏好设置窗口
+构建成功，尺寸 480×328
 ```
 
-同时确认：
+另外确认：
 
 - 菜单栏出现应用图标，Dock 中无图标，无主窗口
 - 已存在的 5 个示例目录被自动识别（未写死名称）
-- 正在被用户 Chrome 使用的配置 `我` 被正确标记为运行中，且复制/删除被禁用
+- 当某个配置正被 Chrome 使用时会显示「● 运行中」并禁用复制/删除（见提交记录中的诊断输出）
 
-## 构建与产物
+## 分发产物
 
 ```
-lipo -archs: x86_64
-LSMinimumSystemVersion = 13.0, LSUIElement = true
-签名：ad-hoc（codesign -s -），无开发者证书、无公证
-应用体积：2.5 MB
-ZIP SHA-256：1e7e7c6edcb91f94834bfc2c03ac51b254e289495b8ec2b4ceee7c91c62c56eb
+dist/ChromeProfiles-1.0.0-universal.zip    1.7 MB
+dist/ChromeProfiles-1.0.0-universal.dmg    1.9 MB
+dist/SHA256SUMS.txt
 ```
+
+DMG 实测：
+
+```
+$ hdiutil verify dist/ChromeProfiles-1.0.0-universal.dmg
+checksum ... is VALID
+
+$ hdiutil attach … && ls /Volumes/…
+Applications -> /Applications
+ChromeProfiles.app
+```
+
+挂载后的 app 内可执行文件为 `x86_64 arm64`，`codesign -dv` 显示 `Signature=adhoc`、`flags=0x2(adhoc)`，未出现 Developer ID；从 DMG 中直接运行 `--diagnostics` 正常输出。
+
+ZIP 实测：解压后 `codesign --verify --deep --strict` 通过，无 `__MACOSX` 冗余目录。
 
 ## 资源占用（空闲 3 秒采样）
 
 | 指标 | 实测 |
 | --- | --- |
-| 常驻内存（physical footprint） | 5.5 MB |
+| 常驻内存（physical footprint） | 5.9 MB |
 | 空闲 CPU | 0.00% |
 | 后台轮询 / 网络请求 / 辅助进程 | 无 |
 
@@ -111,7 +144,8 @@ ZIP SHA-256：1e7e7c6edcb91f94834bfc2c03ac51b254e289495b8ec2b4ceee7c91c62c56eb
 2. 「新建配置…」输入框可正常输入中文、可取消
 3. 「复制到新配置…」「移入废纸篓…」的对话框文案与按钮可用，删除后目录确实出现在废纸篓
 4. 「偏好设置…」窗口可打开、可切换根目录、切换后旧目录内容不变
-5. 从 GitHub Releases 下载 ZIP → 解压 → 拖入应用程序 → 首次打开按「系统设置 → 隐私与安全性 → 仍要打开」放行成功
-6. 退出应用后已启动的 Chrome 仍在运行
+5. 下载 DMG → 拖入应用程序 → Control 点按打开 → 系统「仍要打开」放行成功
+6. 在 Apple Silicon Mac 上确认应用正常启动（Universal 架构已由 `lipo` 验证，但未在真机运行）
+7. 退出应用后已启动的 Chrome 仍在运行
 
-上述 1–4 项的等效逻辑已由单元测试与 `--diagnostics` 输出覆盖；5–6 项只能在真实下载安装路径中验证。
+上述 1–4 项的等效逻辑已由单元测试与 `--diagnostics` 输出覆盖；5–7 项只能在真实安装/真机路径中验证。

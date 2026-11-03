@@ -1,10 +1,10 @@
 # 更新日志
 
-本项目使用语义化版本号：`主版本.次版本.修订版本`。
+本项目使用语义化版本号：`主版本.次版本.修订版本`，发布由 `v*.*.*` tag 触发。
 
 ## 1.0.0 — 首个公开版本
 
-面向 Intel（x86_64）Mac，最低要求 macOS 13 Ventura。
+Universal Binary（x86_64 + arm64），最低要求 macOS 12.0 Monterey。
 
 ### 新增
 
@@ -19,13 +19,15 @@
 - 偏好设置：展示并打开配置根目录，支持自定义根目录（不移动、不删除旧目录）
 - 状态未知时保守降级：禁用复制与删除
 - `--diagnostics` 只读诊断输出，便于反馈问题
-- 84 个单元测试 + 本地真实 Chrome 验收程序 `IntegrationCheck`
-- 无 Xcode 构建脚本：SwiftPM Release 构建、Bundle 组装、架构校验、ad-hoc 签名、ZIP 与 SHA-256
-- GitHub Actions：推送到 main 与 PR 时测试并在 Intel Runner 构建；推送 `v*.*.*` tag 自动发布 Release
+- 91 个单元测试 + 本地真实 Chrome 验收程序 `IntegrationCheck`
+- 异步扫描：目录同步列举保证实时，进程状态后台扫描后刷新菜单
+- Universal 构建脚本：Xcode 与 SwiftPM 两个后端，产物均为 x86_64 + arm64
+- 分发：ZIP + DMG + `SHA256SUMS.txt`，ad-hoc 签名（非 Developer ID、未公证）
+- GitHub Actions：多版本 macOS 测试、Universal 构建与产物校验、tag 触发 Release
 
 ### 已知限制
 
-- 仅支持 Intel x86_64 与稳定版 Google Chrome
+- 仅支持稳定版 Google Chrome
 - 只管理「用户数据根目录」层，不管理 Chrome 内部的 `Default`、`Profile 1`
-- 未签名、未公证，首次打开需通过「系统设置 → 隐私与安全性 → 仍要打开」放行
+- 未签名、未公证，首次打开需通过 Control 点按或「系统设置 → 隐私与安全性 → 仍要打开」放行
 - 不提供开机自启

@@ -71,7 +71,7 @@ final class PreferencesWindowController: NSWindowController {
         explanation.textColor = .secondaryLabelColor
 
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
-        let versionLabel = NSTextField(labelWithString: "Chrome Profile Manager \(version) · 原生 AppKit 菜单栏工具")
+        let versionLabel = NSTextField(labelWithString: "Chrome Profiles \(version) · 原生 AppKit 菜单栏工具")
         versionLabel.font = .systemFont(ofSize: 11)
         versionLabel.textColor = .tertiaryLabelColor
 

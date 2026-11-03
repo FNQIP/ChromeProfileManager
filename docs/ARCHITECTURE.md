@@ -25,11 +25,26 @@
 ## 一次菜单打开发生了什么
 
 1. `menuNeedsUpdate` 被 AppKit 调用
-2. `ProfileService.snapshot()` 做一次扫描：列根目录一级子目录 → 读一次进程表 → 定位 Chrome
-3. `MenuModel.make(from:)` 把快照转成 `[MenuRow]`（表头、警告、配置、空状态、命令）
-4. 控制器按行生成 `NSMenuItem`，配置项带子菜单
+2. `ProfileService.listProfiles()` 同步读一次根目录（一次 `readdir`，开销极小），保证外部新建/删除的目录立刻可见
+3. 运行状态优先用缓存；首次打开且无缓存时同步扫一次，避免菜单先闪一下「状态未知」
+4. 组装 `ScanResult` → `MenuModel.make(from:)` → `[MenuRow]`（表头、警告、配置、空状态、命令）
+5. 控制器按行生成 `NSMenuItem`，配置项带子菜单
+6. 同时在后台队列启动一次进程扫描；结果回来后更新缓存，如果菜单还开着就原地重建一次（不会递归触发扫描）
 
-没有定时器、没有后台轮询、没有常驻辅助进程。空闲时只有状态栏图标和菜单对象存在。
+没有定时器、没有高频轮询、没有常驻辅助进程。空闲时只有状态栏图标和菜单对象存在。
+
+## 扫描策略（异步 + 缓存）
+
+| 数据 | 时机 | 线程 | 理由 |
+| --- | --- | --- | --- |
+| 目录列表 | 每次打开菜单 | 主线程 | 一次 `readdir`，微秒级，换来「菜单永远是最新的」 |
+| 运行状态 | 打开菜单后、操作后 | 后台队列 | 要遍历数百个进程并逐个 `sysctl(KERN_PROCARGS2)`，较重 |
+| Chrome 定位 | 首次与启动预热 | 后台/主线程均可 | 两次 `stat` |
+
+缓存失效与安全：菜单上的禁用状态只是展示，**每次复制/删除前都会重新同步校验运行状态**（`runningState(for:)`）。因此即使缓存短暂过期，也不会误删正在使用的配置。
+
+操作（新建/复制/删除/切换根目录/刷新）完成后会同步扫一次状态再重建菜单，新出现的配置立刻有正确的状态，不会停留在「未知」。
+
 
 ## 运行状态识别
 
@@ -74,11 +89,45 @@
 
 ## 构建与分发
 
-- 只用 `swift build -c release --triple x86_64-apple-macosx13.0`，不生成 Xcode 工程，不调用 `xcodebuild`
-- 脚本手工组装 `.app`（`Info.plist` + `LSUIElement=true` + 图标），`lipo -archs` 校验必须包含 `x86_64`
-- ad-hoc 签名（`codesign -s -`）：不需要开发者账号，也不做公证
-- `ditto` 打 ZIP，`shasum -a 256` 生成校验文件
-- GitHub Actions 在 Intel Runner 上重复同样的流程；Release 由 tag 触发并重新测试
+目标：**Universal Binary（x86_64 + arm64），最低 macOS 12.0**。`Scripts/build-app.sh` 有两个后端，产物一致：
+
+**Xcode 后端**（有完整 Xcode 时自动优先，CI 使用）
+
+```
+xcodebuild -scheme ChromeProfiles -configuration Release \
+  -destination 'generic/platform=macOS' \
+  ARCHS="x86_64 arm64" ONLY_ACTIVE_ARCH=NO \
+  MACOSX_DEPLOYMENT_TARGET=12.0 \
+  SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_VERSION=5 \
+  DEAD_CODE_STRIPPING=YES ENABLE_HARDENED_RUNTIME=NO \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+```
+
+**SwiftPM 后端**（仅装了 Command Line Tools 时）
+
+```
+swift build -c release --triple x86_64-apple-macosx12.0 -Xlinker -dead_strip -Xswiftc -O
+swift build -c release --triple arm64-apple-macosx12.0  -Xlinker -dead_strip -Xswiftc -O
+lipo -create -output ChromeProfiles …
+```
+
+两者都不把「仅 arm64」的编译选项写进通用配置——架构只由 `ARCHS` / `--triple` 决定，`ONLY_ACTIVE_ARCH=NO` 保证同时产出两个切片。
+
+构建后固定做这些校验，任一不满足即失败：
+
+1. `lipo -archs` 同时包含 `x86_64` 与 `arm64`
+2. `vtool -show-build` 每个切片都是 `minos 12.0`
+3. `Info.plist` 的 `LSMinimumSystemVersion` 为 `12.0`、`LSUIElement` 为 `true`
+4. 组装后的 `.app` 内可执行文件仍是 fat binary
+5. `codesign --verify --deep --strict` 通过，且为 ad-hoc（不出现 Developer ID）
+
+分发：
+
+- `ditto` 打 ZIP（`--norsrc --noextattr`，避免 `__MACOSX`）
+- `hdiutil` 生成 UDZO DMG，内含 `ChromeProfiles.app` 与 `Applications` 符号链接
+- `shasum -a 256` 生成 `SHA256SUMS.txt`
+- ad-hoc 签名（`codesign -s -`）：不需要开发者账号，也不做公证；CI 不配置任何证书或公证凭据
+- GitHub Actions：多版本 macOS 跑测试，`macos-15` 构建 Universal，`macos-13` 用产物做冒烟；tag 触发 Release 上传三个附件
 
 ## 不做的事
 
@@ -86,3 +135,5 @@
 - 不改 Chrome 默认用户目录
 - 不强制结束 Chrome，不清理锁文件
 - 不做遥测、不联网、不写数据库、不起后台服务
+- 不使用 Apple Developer ID 证书，不做公证，不把未签名应用宣传成已公证
+

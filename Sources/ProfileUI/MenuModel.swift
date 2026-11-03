@@ -39,7 +39,7 @@ public enum MenuCommand: String, Equatable, CaseIterable {
         case .refresh: return "刷新列表"
         case .openRoot: return "打开配置根目录"
         case .preferences: return "偏好设置…"
-        case .quit: return "退出 Chrome Profile Manager"
+        case .quit: return "退出 Chrome Profiles"
         }
     }
 

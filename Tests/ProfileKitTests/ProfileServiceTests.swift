@@ -313,3 +313,100 @@ final class PreferencesTests {
         #expect(preferences.rootURL.path == PathHelpers.canonicalPath("~/ChromeProfiles"))
     }
 }
+
+@Suite("分步扫描")
+final class ProfileScanTests {
+
+    private let temp: TemporaryDirectory
+    private let root: URL
+    private let store: ProfileStore
+    private let lister = FakeProcessLister()
+
+    init() {
+        temp = TemporaryDirectory()
+        root = temp.url.appendingPathComponent("ChromeProfiles", isDirectory: true)
+        store = ProfileStore(rootURL: root)
+    }
+
+    deinit {
+        temp.cleanup()
+    }
+
+    private func makeService(locatorError: Error? = nil) -> ProfileService {
+        let chrome = ChromeInstallation(bundleURL: URL(fileURLWithPath: "/Applications/Google Chrome.app"))
+        let locator = StubLocator(result: locatorError.map { .failure($0) } ?? .success(chrome))
+        return ProfileService(store: store, locator: locator, launcher: SpyLauncher(), processLister: lister)
+    }
+
+    @Test("目录列举单独可用且不读进程表")
+    func listingDoesNotTouchProcessTable() throws {
+        _ = try store.createProfile(named: "我")
+        let service = makeService()
+
+        let listing = service.listProfiles()
+
+        #expect(listing.error == nil)
+        #expect(listing.profiles.map(\.name) == ["我"])
+        #expect(lister.callCount == 0, "列举目录不应触发进程扫描")
+    }
+
+    @Test("状态扫描按路径返回，未匹配为未运行")
+    func statesAreKeyedByPath() throws {
+        let alpha = try store.createProfile(named: "我")
+        let beta = try store.createProfile(named: "姐")
+        lister.snapshots = [
+            ProcessSnapshot(pid: 500,
+                            executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                            arguments: ["chrome", "--user-data-dir=" + alpha.path])
+        ]
+
+        let result = makeService().scanRunningStates(for: [alpha, beta])
+
+        #expect(result.error == nil)
+        #expect(result.states[alpha.path] == .running(pids: [500]))
+        #expect(result.states[beta.path] == .notRunning)
+    }
+
+    @Test("进程表不可读时所有状态为未知")
+    func statesAreUnknownWhenListingFails() throws {
+        let alpha = try store.createProfile(named: "我")
+        lister.error = ProcessListingError.enumerationFailed(errno: 1)
+
+        let result = makeService().scanRunningStates(for: [alpha])
+
+        #expect(result.error != nil)
+        #expect(result.states[alpha.path]?.isUnknown == true)
+    }
+
+    @Test("缓存缺失且进程表可读时按未运行处理")
+    func missingCachedStateFallsBackToNotRunning() {
+        let profile = Profile(name: "我", url: root.appendingPathComponent("我", isDirectory: true))
+        let result = ScanResult(rootURL: root, profiles: [profile])
+
+        #expect(result.state(for: profile) == .notRunning)
+        #expect(result.snapshot().entries.first?.canModify == true)
+    }
+
+    @Test("缓存缺失但进程表不可读时保守为未知")
+    func missingCachedStateWithProcessErrorIsUnknown() {
+        let profile = Profile(name: "我", url: root.appendingPathComponent("我", isDirectory: true))
+        let result = ScanResult(rootURL: root,
+                                profiles: [profile],
+                                processListingError: "无法读取系统进程列表")
+
+        #expect(result.state(for: profile).isUnknown)
+        #expect(result.snapshot().entries.first?.canModify == false)
+    }
+
+    @Test("完整同步扫描仍然可用")
+    func fullScanStillComposesEverything() throws {
+        _ = try store.createProfile(named: "我")
+        lister.snapshots = []
+
+        let snapshot = makeService().scan().snapshot()
+
+        #expect(snapshot.entries.count == 1)
+        #expect(snapshot.entries.first?.state == .notRunning)
+        #expect(snapshot.hasChrome)
+    }
+}

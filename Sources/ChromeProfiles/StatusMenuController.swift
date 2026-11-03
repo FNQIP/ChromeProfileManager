@@ -15,6 +15,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private var preferencesWindowController: PreferencesWindowController?
 
+    // 运行状态缓存：目录列表每次同步刷新（readdir 很便宜），进程扫描放到后台，
+    // 结果到达后更新缓存，菜单仍打开时再刷新一次界面。
+    private let scanQueue = DispatchQueue(label: "io.github.chromeprofiles.scan",
+                                          qos: .userInitiated)
+    private var cachedStates: [String: ProfileRunningState] = [:]
+    private var cachedProcessError: String?
+    private var cachedChrome: ChromeInstallation?
+    private var cachedChromeError: String?
+    private var hasScannedStates = false
+    private var isScanningStates = false
+    private var isMenuOpen = false
+
     init(service: ProfileService, preferences: Preferences) {
         self.service = service
         self.preferences = preferences
@@ -26,6 +38,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
+
+        // 启动后先预热一次状态缓存，避免第一次打开菜单时信息缺失。
+        warmUpCache()
     }
 
     // MARK: - Status item
@@ -36,8 +51,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         icon.isTemplate = true
         button.image = icon
         button.imagePosition = .imageOnly
-        button.toolTip = "Chrome Profile Manager"
-        button.setAccessibilityLabel("Chrome Profile Manager")
+        button.toolTip = "Chrome Profiles"
+        button.setAccessibilityLabel("Chrome Profiles")
     }
 
     // MARK: - Menu
@@ -46,10 +61,44 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         rebuildMenu()
     }
 
-    private func rebuildMenu() {
+    func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
+    }
+
+    private func rebuildMenu(kickScan: Bool = true) {
         menu.removeAllItems()
 
-        let model = MenuModel.make(from: service.snapshot())
+        // 目录列举是同步且廉价的，保证外部变动立刻反映到菜单。
+        let listing = service.listProfiles()
+
+        // 首次打开还没有状态缓存时同步扫一次：宁可多花几十毫秒，也不要让菜单
+        // 先显示"未运行"再跳变（那会让人误以为可以安全删除）。
+        if !hasScannedStates, !listing.profiles.isEmpty {
+            let scan = service.scanRunningStates(for: listing.profiles)
+            cachedStates = scan.states
+            cachedProcessError = scan.error
+            hasScannedStates = true
+        }
+
+        if cachedChrome == nil, cachedChromeError == nil {
+            let chrome = service.chromeStatus()
+            cachedChrome = chrome.installation
+            cachedChromeError = chrome.error
+        }
+
+        let scan = ScanResult(rootURL: service.rootURL,
+                              profiles: listing.profiles,
+                              rootError: listing.error,
+                              states: cachedStates,
+                              processListingError: cachedProcessError,
+                              chromeInstallation: cachedChrome,
+                              chromeError: cachedChromeError)
+
+        let model = MenuModel.make(from: scan.snapshot())
 
         for row in model.rows {
             switch row {
@@ -67,6 +116,60 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 menu.addItem(.separator())
             }
         }
+
+        if kickScan {
+            refreshStatesInBackground(for: listing.profiles)
+        }
+    }
+
+    // MARK: - 后台状态扫描
+
+    private func warmUpCache() {
+        let listing = service.listProfiles()
+        refreshStatesInBackground(for: listing.profiles, forceReloadChrome: true)
+    }
+
+    private func refreshStatesInBackground(for profiles: [Profile],
+                                           forceReloadChrome: Bool = false) {
+        guard !profiles.isEmpty, !isScanningStates else { return }
+
+        isScanningStates = true
+        let service = self.service
+
+        scanQueue.async { [weak self] in
+            let scan = service.scanRunningStates(for: profiles)
+            let chrome = forceReloadChrome ? service.chromeStatus() : nil
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+
+                self.cachedStates = scan.states
+                self.cachedProcessError = scan.error
+                self.hasScannedStates = true
+                self.isScanningStates = false
+
+                if let chrome {
+                    self.cachedChrome = chrome.installation
+                    self.cachedChromeError = chrome.error
+                }
+
+                // 菜单还开着就立刻刷新一次，不再次触发扫描以免循环。
+                if self.isMenuOpen {
+                    self.rebuildMenu(kickScan: false)
+                }
+            }
+        }
+    }
+
+    /// 用户操作后立即重扫状态（操作本身很快），让菜单马上反映真实情况。
+    private func refreshStatesNow() {
+        let listing = service.listProfiles()
+        let scan = service.scanRunningStates(for: listing.profiles)
+        cachedStates = scan.states
+        cachedProcessError = scan.error
+        hasScannedStates = true
+        cachedChrome = nil
+        cachedChromeError = nil
     }
 
     /// Builds the menu and returns a textual rendering of it. Used by
@@ -94,7 +197,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func headerItem(profileCount: Int, runningCount: Int) -> NSMenuItem {
         let title = NSMutableAttributedString(
-            string: "Chrome Profile Manager\n",
+            string: "Chrome Profiles\n",
             attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]
         )
         title.append(NSAttributedString(
@@ -292,6 +395,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
             do {
                 try service.createProfile(named: input)
+                refreshStatesNow()
                 rebuildMenu()
                 return
             } catch {
@@ -324,6 +428,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
             do {
                 try service.copyProfile(profile, toName: input)
+                refreshStatesNow()
                 rebuildMenu()
                 return
             } catch {
@@ -352,6 +457,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         do {
             try service.trashProfile(profile)
+            refreshStatesNow()
             rebuildMenu()
         } catch {
             Prompts.show(error: error)
@@ -359,6 +465,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func refresh(_ sender: Any?) {
+        refreshStatesNow()
         rebuildMenu()
     }
 
@@ -410,6 +517,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func applyRootChange() {
         service = ProfileService(store: ProfileStore(rootURL: preferences.rootURL))
+        cachedStates = [:]
+        cachedProcessError = nil
+        cachedChrome = nil
+        cachedChromeError = nil
+        hasScannedStates = false
+        refreshStatesNow()
         rebuildMenu()
     }
 

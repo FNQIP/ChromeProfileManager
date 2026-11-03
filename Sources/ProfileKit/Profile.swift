@@ -4,7 +4,7 @@ import Foundation
 ///
 /// This is *not* a Chrome-internal profile such as `Default` or `Profile 1`;
 /// it is the whole `--user-data-dir` root that Chrome is launched with.
-public struct Profile: Hashable, Identifiable {
+public struct Profile: Hashable, Identifiable, Sendable {
     public let name: String
     public let url: URL
 
@@ -24,7 +24,7 @@ extension Profile: CustomStringConvertible {
 }
 
 /// Running state of the Chrome instance that owns a profile directory.
-public enum ProfileRunningState: Equatable {
+public enum ProfileRunningState: Equatable, Sendable {
     case notRunning
     case running(pids: [Int32])
     /// The state could not be determined (for example the process list was

@@ -20,7 +20,7 @@ enum Diagnostics {
 
         let controller = StatusMenuController(service: service, preferences: preferences)
 
-        print("Chrome Profile Manager 诊断报告")
+        print("Chrome Profiles 诊断报告")
         print("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "开发构建")")
         print("系统：\(ProcessInfo.processInfo.operatingSystemVersionString)")
         print("")

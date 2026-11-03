@@ -6,66 +6,173 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 最小权限：CI 只需要读取代码。
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test-and-build:
-    name: 测试与 Intel 构建
-    # Intel Runner：官方标签 macos-15-intel（备选 macos-26-intel）。
-    runs-on: macos-15-intel
+  # 多版本 macOS + 双架构跑单元测试
+  test:
+    name: 单元测试 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 环境检查
+      - name: 选择并检查 Xcode
         run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode.app ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcode-select -p
+          xcodebuild -version
           sw_vers
           echo "host arch: $(uname -m)"
           swift --version
-          xcode-select -p
-          xcrun --sdk macosx --show-sdk-version
+
+      - name: 项目结构检查
+        run: |
+          set -euo pipefail
+          test -f Package.swift
+          test -d Sources/ProfileKit
+          test -d Sources/ProfileUI
+          test -d Sources/ChromeProfiles
+          test -f Resources/Info.plist.in
+          test -f Scripts/build-app.sh
+          swift package describe --type json > /dev/null
 
       - name: 依赖解析
         run: swift package resolve
 
       - name: 单元测试
-        run: swift test
+        run: swift test --parallel
 
-      - name: Release 构建与 .app 组装
-        run: ./Scripts/build-app.sh
+  # Universal Binary 构建 + ZIP/DMG/SHA256 打包
+  build-universal:
+    name: Universal 构建与打包
+    needs: test
+    runs-on: macos-15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      - name: 架构与 Bundle 校验
+      - name: 选择并检查 Xcode
         run: |
           set -euo pipefail
-          BIN=build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager
+          if [ -d /Applications/Xcode.app ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+
+      - name: 构建 Release（x86_64 + arm64）
+        env:
+          CPM_BUILD_BACKEND: auto
+        run: ./Scripts/build-app.sh
+
+      - name: 检查二进制架构（lipo）
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
           ARCHS=$(lipo -archs "$BIN")
           echo "lipo -archs: $ARCHS"
-          echo "$ARCHS" | grep -qw x86_64
-          MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfileManager.app/Contents/Info.plist)
-          echo "LSMinimumSystemVersion: $MIN_OS"
-          [ "$MIN_OS" = "13.0" ]
-          /usr/libexec/PlistBuddy -c 'Print :LSUIElement' build/ChromeProfileManager.app/Contents/Info.plist | grep -qw true
-          codesign --verify --deep --strict build/ChromeProfileManager.app
+          echo "$ARCHS" | tr ' ' '\n' | grep -qx x86_64
+          echo "$ARCHS" | tr ' ' '\n' | grep -qx arm64
+
+      - name: 检查最低系统版本（vtool）
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+          vtool -show-build "$BIN"
+          COUNT=$(vtool -show-build "$BIN" | grep -c "minos 12.0")
+          echo "包含 minos 12.0 的切片数：$COUNT"
+          [ "$COUNT" -ge 2 ]
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfiles.app/Contents/Info.plist | grep -qx "12.0"
+          /usr/libexec/PlistBuddy -c 'Print :LSUIElement' build/ChromeProfiles.app/Contents/Info.plist | grep -qw true
+
+      - name: 检查签名（ad-hoc，不是 Developer ID）
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict build/ChromeProfiles.app
+          codesign -dv build/ChromeProfiles.app 2>&1 | tee /tmp/sign.txt
+          grep -q "Signature=adhoc" /tmp/sign.txt
+          if grep -qi "Developer ID" /tmp/sign.txt; then
+            echo "错误：不应出现 Developer ID 签名。" >&2
+            exit 1
+          fi
+
+      - name: 检查分发文件
+        run: |
+          set -euo pipefail
+          ls -lh dist
+          unzip -l dist/*.zip | grep -q "ChromeProfiles.app/Contents/MacOS/ChromeProfiles"
+          hdiutil verify dist/*.dmg
+          shasum -a 256 -c dist/SHA256SUMS.txt
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ChromeProfileManager-x86_64
+          name: ChromeProfiles-universal
           path: |
-            dist/*.zip
-            dist/*.sha256
+            dist/ChromeProfiles-*-universal.zip
+            dist/ChromeProfiles-*-universal.dmg
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
 
       - name: 构建摘要
         run: |
           {
-            echo "### 构建结果"
+            echo "### Universal 构建结果"
             echo ""
-            echo "- 架构：$(lipo -archs build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager)"
-            echo "- 最低系统：$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfileManager.app/Contents/Info.plist)"
-            echo "- 体积：$(du -sh build/ChromeProfileManager.app | cut -f1)"
-            echo "- SHA256：$(cut -d' ' -f1 dist/*.sha256)"
+            echo "- 架构：$(lipo -archs build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles)"
+            echo "- 最低系统：$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfiles.app/Contents/Info.plist)"
+            echo "- 体积：$(du -sh build/ChromeProfiles.app | cut -f1)"
+            echo ""
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # 在较旧的 macOS 上跑已构建的产物，验证兼容性
+  smoke-legacy-macos:
+    name: 旧系统冒烟 (macOS 13)
+    needs: build-universal
+    runs-on: macos-13
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: ChromeProfiles-universal
+          path: artifacts
+
+      - name: 解压并检查
+        run: |
+          set -euo pipefail
+          sw_vers
+          cd artifacts
+          unzip -q ChromeProfiles-*-universal.zip
+          BIN=ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -qw x86_64
+          lipo -archs "$BIN" | grep -qw arm64
+          codesign --verify --deep --strict ChromeProfiles.app
+
+      - name: 运行只读诊断
+        run: |
+          set -euo pipefail
+          cd artifacts
+          OUT=$(./ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "配置根目录"
+          echo "$OUT" | grep -q "菜单项"

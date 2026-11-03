@@ -207,6 +207,35 @@ final class ProfileStoreTests {
         }
     }
 
+
+    @Test("不可读的目录仍能列出，复制时给出权限错误")
+    func unreadableProfileIsListedButCopyFails() throws {
+        let source = try store.createProfile(named: "locked")
+        try "secret".write(to: source.url.appendingPathComponent("Cookies"),
+                           atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: source.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
+        }
+
+        // 列举只需要读取父目录，因此仍然可以看到它。
+        #expect(try store.listProfiles().map(\.name) == ["locked"])
+
+        // 复制内容会失败，并且必须以可读的错误返回，而不是静默跳过。
+        let error = caughtError(ProfileStoreError.self) {
+            try store.copyProfile(source, to: "locked copy")
+        }
+        switch error {
+        case .permissionDenied?, .copyFailed?:
+            break
+        default:
+            Issue.record("unexpected error \(String(describing: error))")
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("locked copy").path
+        ))
+    }
+
     // MARK: - Trash
 
     @Test("删除会把目录移出根目录")

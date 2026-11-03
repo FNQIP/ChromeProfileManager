@@ -46,7 +46,7 @@ let service = ProfileService(store: store, processLister: lister)
 
 var spawnedPIDs: [pid_t] = []
 
-print("Chrome Profile Manager 本地验收")
+print("Chrome Profiles 本地验收")
 print("临时根目录：\(tempRoot.path)")
 
 // MARK: - 1. 目录管理

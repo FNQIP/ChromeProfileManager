@@ -1,6 +1,6 @@
 name: Release
 
-# 推送语义化版本 tag（例如 v1.0.0）时重新测试、构建并发布。
+# 推送语义化版本 tag（例如 v1.0.0）时重新测试、构建 Universal Binary 并发布。
 on:
   push:
     tags:
@@ -11,13 +11,18 @@ on:
         description: "要发布的 tag（例如 v1.0.0），需已存在"
         required: true
 
+# 最小权限：仅创建/更新 Release 与上传附件。
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    name: 测试、构建并发布 Intel 版本
-    runs-on: macos-15-intel
+    name: 测试、构建并发布 Universal 版本
+    runs-on: macos-15
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -25,14 +30,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: 环境检查
+      - name: 选择并检查 Xcode
         run: |
-          sw_vers
-          echo "host arch: $(uname -m)"
-          swift --version
+          set -euo pipefail
+          if [ -d /Applications/Xcode.app ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
           xcode-select -p
+          xcodebuild -version
+          swift --version
 
-      - name: 确定版本号
+      - name: 计算版本号
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
@@ -43,52 +51,106 @@ jobs:
           fi
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "发布版本：$VERSION"
 
-      # 发布前重新跑测试，避免发出未经验证的产物。
-      - name: 单元测试
-        run: swift test
-
-      - name: 正式构建（x86_64）
-        run: CPM_VERSION="$VERSION" CPM_BUILD_NUMBER="${{ github.run_number }}" ./Scripts/build-app.sh
-
-      - name: 架构与元数据校验
+      - name: 项目结构检查
         run: |
           set -euo pipefail
-          BIN=build/ChromeProfileManager.app/Contents/MacOS/ChromeProfileManager
+          test -f Package.swift
+          test -d Sources/ProfileKit
+          test -d Sources/ProfileUI
+          test -d Sources/ChromeProfiles
+          test -f Resources/Info.plist.in
+          test -f Scripts/build-app.sh
+          swift package describe --type json > /dev/null
+
+      # 发布前重新测试，避免发出未经验证的产物。
+      - name: 单元测试
+        run: swift test --parallel
+
+      - name: 正式构建（Universal Binary）
+        env:
+          CPM_BUILD_BACKEND: auto
+        run: CPM_VERSION="$VERSION" CPM_BUILD_NUMBER="${{ github.run_number }}" ./Scripts/build-app.sh
+
+      - name: 检查二进制架构（lipo）
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
           ARCHS=$(lipo -archs "$BIN")
           echo "lipo -archs: $ARCHS"
-          echo "$ARCHS" | grep -qw x86_64
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/ChromeProfileManager.app/Contents/Info.plist | grep -qx "$VERSION"
-          codesign --verify --deep --strict build/ChromeProfileManager.app
+          echo "$ARCHS" | tr ' ' '\n' | grep -qx x86_64
+          echo "$ARCHS" | tr ' ' '\n' | grep -qx arm64
+
+      - name: 检查最低系统版本（vtool）
+        run: |
+          set -euo pipefail
+          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+          vtool -show-build "$BIN"
+          COUNT=$(vtool -show-build "$BIN" | grep -c "minos 12.0")
+          echo "包含 minos 12.0 的切片数：$COUNT"
+          [ "$COUNT" -ge 2 ]
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfiles.app/Contents/Info.plist | grep -qx "12.0"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/ChromeProfiles.app/Contents/Info.plist | grep -qx "$VERSION"
+
+      - name: 检查签名（ad-hoc，不是 Developer ID）
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict build/ChromeProfiles.app
+          codesign -dv build/ChromeProfiles.app 2>&1 | tee /tmp/sign.txt
+          grep -q "Signature=adhoc" /tmp/sign.txt
+          if grep -qi "Developer ID" /tmp/sign.txt; then
+            echo "错误：不应出现 Developer ID 签名。" >&2
+            exit 1
+          fi
+
+      - name: 检查分发文件与校验值
+        run: |
+          set -euo pipefail
+          ls -lh dist
+          unzip -l "dist/ChromeProfiles-${VERSION}-universal.zip" | grep -q "ChromeProfiles.app/Contents/MacOS/ChromeProfiles"
+          hdiutil verify "dist/ChromeProfiles-${VERSION}-universal.dmg"
+          ( cd dist && shasum -a 256 -c SHA256SUMS.txt )
 
       - name: 生成发布说明
         run: |
           set -euo pipefail
-          SHA=$(cut -d' ' -f1 "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256")
           cat > RELEASE_NOTES.md <<EOF
-          Chrome Profile Manager ${VERSION}
+          Chrome Profiles ${VERSION}
 
-          - 架构：Intel x86_64（ad-hoc 签名，未公证）
-          - 最低系统：macOS 13 Ventura
+          - 架构：Universal Binary（x86_64 + arm64）
+          - 最低系统：macOS 12.0 Monterey
           - 适用于稳定版 Google Chrome
+          - 采用 ad-hoc 签名，**未使用 Apple Developer ID 签名，也未公证**
 
           ## 安装
 
-          1. 下载 \`ChromeProfileManager-${VERSION}-macOS-x86_64.zip\` 并解压
-          2. 把 \`ChromeProfileManager.app\` 拖入「应用程序」
-          3. 首次打开若被拦截，到「系统设置 → 隐私与安全性」点「仍要打开」
+          1. 下载 \`ChromeProfiles-${VERSION}-universal.dmg\`
+          2. 双击打开，把 \`ChromeProfiles.app\` 拖入「应用程序」
+          3. 首次启动：按住 **Control** 点按应用图标 → 选择「打开」→ 再确认一次「打开」
+          4. 之后可正常双击启动
 
-          详细步骤见仓库中的 docs/INSTALL.md，常见问题见 docs/TROUBLESHOOTING.md。
+          若系统仍提示「无法验证开发者」，请到「系统设置 → 隐私与安全性」中对该应用点「仍要打开」。
+
+          可选（仅在确认下载来源可信时执行）：
+
+          \`\`\`
+          xattr -dr com.apple.quarantine /Applications/ChromeProfiles.app
+          \`\`\`
+
+          该命令会移除下载隔离标记，请勿在来源不明的文件上执行，也不需要为此关闭 Gatekeeper。
 
           ## 校验下载
 
           \`\`\`
-          shasum -a 256 -c ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256
+          shasum -a 256 -c SHA256SUMS.txt
           \`\`\`
 
-          SHA-256：\`${SHA}\`
+          ## 附件
 
-          > 本应用未使用 Apple Developer ID 签名，也未公证，因此首次打开需要手动放行一次。请勿为此全局关闭 Gatekeeper。
+          - \`ChromeProfiles-${VERSION}-universal.zip\`
+          - \`ChromeProfiles-${VERSION}-universal.dmg\`
+          - \`SHA256SUMS.txt\`
           EOF
           cat RELEASE_NOTES.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -98,7 +160,8 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$TAG" \
-            "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip" \
-            "dist/ChromeProfileManager-${VERSION}-macOS-x86_64.zip.sha256" \
-            --title "Chrome Profile Manager ${VERSION}" \
+            "dist/ChromeProfiles-${VERSION}-universal.zip" \
+            "dist/ChromeProfiles-${VERSION}-universal.dmg" \
+            "dist/SHA256SUMS.txt" \
+            --title "Chrome Profiles ${VERSION}" \
             --notes-file RELEASE_NOTES.md
