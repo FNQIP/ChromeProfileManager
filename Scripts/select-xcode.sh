@@ -52,11 +52,11 @@ if [ "${#candidates[@]}" -eq 0 ]; then
     exit 1
 fi
 
-echo "候选 Xcode：${candidates[*]}"
+echo "候选 Xcode：${candidates[*]}" >&2
 
 for app in ${candidates[@]+"${candidates[@]}"}; do
     banner="$(swift_banner "${app}/Contents/Developer")"
-    echo "  探测 ${app} → ${banner%%$'\n'*}"
+    echo "  探测 ${app} → ${banner%%$'\n'*}" >&2
 
     case "${banner}" in
         *"Swift version 6"*)
@@ -67,12 +67,12 @@ for app in ${candidates[@]+"${candidates[@]}"}; do
 done
 
 echo "::error::没有找到自带 Swift 6 的 Xcode（单元测试需要 swift-testing）。"
-echo "候选：${candidates[*]}"
+echo "候选：${candidates[*]}" >&2
 for app in ${candidates[@]+"${candidates[@]}"}; do
-    echo "--- ${app}"
-    swift_banner "${app}/Contents/Developer" | head -3
+    echo "--- ${app}" >&2
+    swift_banner "${app}/Contents/Developer" 2>&1 | head -3 >&2
 done
-echo "--- 当前 xcode-select"
-xcode-select -p 2>&1 || true
-swift --version 2>&1 | head -3 || true
+echo "--- 当前 xcode-select" >&2
+xcode-select -p >&2 2>&1 || true
+swift --version 2>&1 | head -3 >&2 || true
 exit 1

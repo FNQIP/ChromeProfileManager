@@ -32,8 +32,12 @@ jobs:
 
       - name: 选择并检查 Xcode
         run: |
-          set -euo pipefail
-          APP="$(./Scripts/select-xcode.sh)"
+          set -Eeuo pipefail
+          trap 'echo "::error::Xcode 步骤失败：行 ${LINENO}，命令 ${BASH_COMMAND}"' ERR
+          if ! APP="$(./Scripts/select-xcode.sh)"; then
+            echo "::error::select-xcode.sh 未能选出可用 Xcode（详见上方日志）"
+            exit 1
+          fi
           echo "使用 Xcode：${APP}"
           sudo xcode-select -s "${APP}"
           xcode-select -p
