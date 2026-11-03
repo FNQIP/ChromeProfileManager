@@ -22,7 +22,10 @@ concurrency:
 jobs:
   release:
     name: 测试、构建并发布 Universal 版本
-    runs-on: macos-15
+    # 用 x64 Runner：arm64 池排队时间不可控（详见 README 说明），
+    # 在 x64 上交叉编译即可产出 Universal Binary。
+    runs-on: macos-15-intel
+    timeout-minutes: 45
     steps:
       - name: 检出代码
         uses: actions/checkout@v4

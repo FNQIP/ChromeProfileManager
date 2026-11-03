@@ -171,12 +171,12 @@ Scripts/
 
 ## 持续集成与发布
 
-- `.github/workflows/ci.yml`（每次推送 / PR）：`macos-15`（arm64）与 `macos-15-intel`（x64）跑单元测试 → `macos-15` 构建 Universal Binary 并校验 `lipo`/`vtool`/签名/ZIP/DMG/SHA256 → `macos-14` 用构建产物做冒烟。
-- `.github/workflows/compat.yml`（每周一 03:00 UTC + 手动）：在 `macos-26` 上跑完整测试与构建，覆盖更新的系统。
+- `.github/workflows/ci.yml`（每次推送 / PR）：单个 `macos-15-intel`（x64）任务完成「测试 → Universal 构建（交叉编译 arm64 切片）→ `lipo`/`vtool`/签名/分发包校验 → 冒烟运行」，约 4～6 分钟。
+- `.github/workflows/compat.yml`（每周一 03:00 UTC + 手动）：`macos-26`（arm64，更新系统）与 `macos-14`（更旧系统）各跑一遍测试与构建。
 - `.github/workflows/release.yml`：推送 `v*.*.*` tag 触发，重新跑测试与正式构建，上传 `zip`、`dmg`、`SHA256SUMS.txt` 三个附件到 GitHub Releases。
 - 工作流只声明最小必要权限（`contents: read` / `contents: write`），不配置任何 Apple 证书、账号或公证凭据。
 
-> **为什么把 macOS 26 拆成独立工作流**：GitHub 的较新 arm64 Runner 产能紧张，`macos-26` 经常排队 5～10 分钟，实际执行只要一两分钟。放在每次推送的矩阵里会显著拉长 CI 墙钟时间，因此改为定时跑。
+> **为什么日常 CI 只用 x64 Runner**：GitHub 的 macOS arm64 Runner 产能紧张，实测 `macos-15`(arm64) 排队 10 分钟以上，而 `macos-15-intel`(x64) 通常 1 分钟内分配。x64 上可以直接交叉编译出 arm64 切片（`ARCHS="x86_64 arm64"`），产物仍是 Universal Binary；arm64 与新旧系统的实跑验证放到每周的 compat 工作流，既不牺牲覆盖，也不拖慢每次提交。
 
 ## 已知限制
 

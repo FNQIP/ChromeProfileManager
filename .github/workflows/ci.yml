@@ -15,19 +15,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 双架构（arm64 + x64）跑单元测试。
+  # 单任务流水线：测试 → Universal 构建 → 校验 → 打包 → 冒烟。
   #
-  # 这里只放「排队快」的镜像：macos-26 等新版本 arm64 Runner 产能紧张，
-  # 经常排队 5～10 分钟，会把每次推送的 CI 拖长。macOS 26 的兼容性验证
-  # 放在 compat.yml（每周定时 + 手动触发），不阻塞日常提交。
-  test:
-    name: 单元测试 (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+  # 为什么只用一个 Runner：
+  # - GitHub 的 macOS arm64 Runner 产能紧张，实测 `macos-15`(arm64) 排队 10 分钟以上，
+  #   而 `macos-15-intel`(x64) 通常 1 分钟内就分配；多任务串行排队会把 CI 拖到 15+ 分钟。
+  # - x64 机器上可以直接交叉编译出 arm64 切片（ARCHS="x86_64 arm64" / SwiftPM --triple），
+  #   产物仍是 Universal；arm64 与更新系统的实跑验证放在 compat.yml（每周 + 手动）。
+  test-and-build:
+    name: 测试、Universal 构建与打包
+    runs-on: macos-15-intel
+    timeout-minutes: 45
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -44,6 +42,8 @@ jobs:
           sudo xcode-select -s "${APP}"
           xcode-select -p
           xcodebuild -version
+          sw_vers
+          echo "host arch: $(uname -m)"
           swift --version
 
       - name: 项目结构检查
@@ -57,64 +57,32 @@ jobs:
           test -f Scripts/build-app.sh
           swift package describe --type json > /dev/null
 
-      - name: 依赖解析
-        run: swift package resolve
-
       - name: 单元测试
         run: swift test --parallel
 
-  # Universal Binary 构建 + ZIP/DMG/SHA256 打包
-  build-universal:
-    name: Universal 构建与打包
-    needs: test
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 选择并检查 Xcode
-        run: |
-          set -Eeuo pipefail
-          trap 'echo "::error::Xcode 步骤失败：行 ${LINENO}，命令 ${BASH_COMMAND}"' ERR
-          if ! APP="$(./Scripts/select-xcode.sh)"; then
-            echo "::error::select-xcode.sh 未能选出可用 Xcode（详见上方日志）"
-            exit 1
-          fi
-          echo "使用 Xcode：${APP}"
-          sudo xcode-select -s "${APP}"
-          xcode-select -p
-          xcodebuild -version
-          swift --version
-
-      - name: 构建 Release（x86_64 + arm64）
+      - name: Universal 构建与打包（x86_64 + arm64）
         env:
           CPM_BUILD_BACKEND: auto
         run: ./Scripts/build-app.sh
 
-      - name: 检查二进制架构（lipo）
+      - name: 检查架构、最低系统与签名
         run: |
           set -euo pipefail
           BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
+
           ARCHS=$(lipo -archs "$BIN")
           echo "lipo -archs: $ARCHS"
           echo "$ARCHS" | tr ' ' '\n' | grep -qx x86_64
           echo "$ARCHS" | tr ' ' '\n' | grep -qx arm64
 
-      - name: 检查最低系统版本（vtool）
-        run: |
-          set -euo pipefail
-          BIN=build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles
           vtool -show-build "$BIN"
           COUNT=$(vtool -show-build "$BIN" | grep -c "minos 12.0")
           echo "包含 minos 12.0 的切片数：$COUNT"
           [ "$COUNT" -ge 2 ]
+
           /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/ChromeProfiles.app/Contents/Info.plist | grep -qx "12.0"
           /usr/libexec/PlistBuddy -c 'Print :LSUIElement' build/ChromeProfiles.app/Contents/Info.plist | grep -qw true
 
-      - name: 检查签名（ad-hoc，不是 Developer ID）
-        run: |
-          set -euo pipefail
           codesign --verify --deep --strict build/ChromeProfiles.app
           codesign -dv build/ChromeProfiles.app 2>&1 | tee /tmp/sign.txt
           grep -q "Signature=adhoc" /tmp/sign.txt
@@ -123,13 +91,21 @@ jobs:
             exit 1
           fi
 
-      - name: 检查分发文件
+      - name: 检查分发包
         run: |
           set -euo pipefail
           ls -lh dist
           unzip -l dist/ChromeProfiles-*-universal.zip | grep -q "ChromeProfiles.app/Contents/MacOS/ChromeProfiles"
           hdiutil verify dist/ChromeProfiles-*-universal.dmg
           ( cd dist && shasum -a 256 -c SHA256SUMS.txt )
+
+      - name: 冒烟运行（只读诊断）
+        run: |
+          set -euo pipefail
+          OUT=$(./build/ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "配置根目录"
+          echo "$OUT" | grep -q "卸载 Chrome Profiles"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -155,38 +131,3 @@ jobs:
             cat dist/SHA256SUMS.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # 在较旧的 macOS 上跑已构建的产物，验证兼容性。
-  # macos-14 是目前仍可用的最老镜像（x64，已标记 deprecated）；镜像退役后需调整。
-  smoke-legacy-macos:
-    name: 旧系统冒烟 (macOS 14)
-    needs: build-universal
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - name: 下载构建产物
-        uses: actions/download-artifact@v4
-        with:
-          name: ChromeProfiles-universal
-          path: artifacts
-
-      - name: 解压并检查
-        run: |
-          set -euo pipefail
-          sw_vers
-          cd artifacts
-          unzip -q ChromeProfiles-*-universal.zip
-          BIN=ChromeProfiles.app/Contents/MacOS/ChromeProfiles
-          lipo -archs "$BIN"
-          lipo -archs "$BIN" | grep -qw x86_64
-          lipo -archs "$BIN" | grep -qw arm64
-          codesign --verify --deep --strict ChromeProfiles.app
-
-      - name: 运行只读诊断
-        run: |
-          set -euo pipefail
-          cd artifacts
-          OUT=$(./ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics 2>&1)
-          echo "$OUT"
-          echo "$OUT" | grep -q "配置根目录"
-          echo "$OUT" | grep -q "菜单项"
