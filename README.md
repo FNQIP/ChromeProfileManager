@@ -57,6 +57,8 @@ Chrome Profiles
 打开配置根目录
 偏好设置…        ⌘,
 ──────────────────
+卸载 Chrome Profiles…
+──────────────────
 退出 Chrome Profiles   ⌘Q
 ```
 
@@ -98,8 +100,8 @@ CPM_BUILD_BACKEND=swiftpm ./Scripts/build-app.sh   # 只用 SwiftPM
 
 ```
 build/ChromeProfiles.app
-dist/ChromeProfiles-1.0.1-universal.zip
-dist/ChromeProfiles-1.0.1-universal.dmg
+dist/ChromeProfiles-1.0.2-universal.zip
+dist/ChromeProfiles-1.0.2-universal.dmg
 dist/SHA256SUMS.txt
 ```
 
@@ -109,7 +111,7 @@ dist/SHA256SUMS.txt
 
 | 变量 | 作用 |
 | --- | --- |
-| `CPM_VERSION` | 覆盖版本号（默认 1.0.1） |
+| `CPM_VERSION` | 覆盖版本号（默认 1.0.2） |
 | `CPM_BUILD_NUMBER` | 覆盖 Build 号 |
 | `CPM_BUILD_BACKEND` | `auto` / `xcode` / `swiftpm` |
 | `CPM_SKIP_DMG=1` | 不生成 DMG |

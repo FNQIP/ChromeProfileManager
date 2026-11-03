@@ -31,6 +31,7 @@ public enum MenuCommand: String, Equatable, CaseIterable {
     case refresh
     case openRoot
     case preferences
+    case uninstall
     case quit
 
     public var title: String {
@@ -39,6 +40,7 @@ public enum MenuCommand: String, Equatable, CaseIterable {
         case .refresh: return "刷新列表"
         case .openRoot: return "打开配置根目录"
         case .preferences: return "偏好设置…"
+        case .uninstall: return "卸载 Chrome Profiles…"
         case .quit: return "退出 Chrome Profiles"
         }
     }
@@ -51,6 +53,7 @@ public enum MenuCommand: String, Equatable, CaseIterable {
         case .preferences: return ","
         case .quit: return "q"
         case .openRoot: return ""
+        case .uninstall: return ""
         }
     }
 }
@@ -111,6 +114,8 @@ public struct MenuModel: Equatable {
         rows.append(.command(.refresh))
         rows.append(.command(.openRoot))
         rows.append(.command(.preferences))
+        rows.append(.separator)
+        rows.append(.command(.uninstall))
         rows.append(.separator)
         rows.append(.command(.quit))
 

@@ -26,7 +26,7 @@ shasum -a 256 -c SHA256SUMS.txt
 （只有下载了同一目录下的两个分发包时，`-c` 才会同时校验；也可以手工比对：
 
 ```bash
-shasum -a 256 ChromeProfiles-1.0.1-universal.dmg
+shasum -a 256 ChromeProfiles-1.0.2-universal.dmg
 ```）
 
 ## 4. 用 DMG 安装
@@ -86,6 +86,8 @@ xattr -dr com.apple.quarantine /Applications/ChromeProfiles.app
 
 1. 点菜单栏图标 →「退出 Chrome Profiles」（已启动的 Chrome 不会被关闭）
 2. 把 `ChromeProfiles.app` 从「应用程序」移到废纸篓（用 DMG 装的记得先推出磁盘映像）
+
+也可以直接用菜单里的「**卸载 Chrome Profiles…**」：确认后应用会把自己移入废纸篓并退出，同时清除本应用的偏好设置。**它不会删除 `~/ChromeProfiles` 里的浏览数据**。从 DMG 直接运行（只读卷）时该入口会提示先把应用拖到「应用程序」。
 3. 如需清除偏好设置（只有改过「配置根目录」才会有数据）：
 
 ```bash

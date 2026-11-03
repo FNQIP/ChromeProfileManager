@@ -69,7 +69,7 @@ $ /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' …
 ```
 $ ./ChromeProfiles.app/Contents/MacOS/ChromeProfiles --diagnostics
 Chrome Profiles 诊断报告
-版本：1.0.1
+版本：1.0.2
 系统：Version 15.8.2 (Build 24H232)
 
 == 配置根目录
@@ -108,15 +108,15 @@ Chrome Profiles 诊断报告
 ## 分发产物
 
 ```
-dist/ChromeProfiles-1.0.1-universal.zip    1.7 MB
-dist/ChromeProfiles-1.0.1-universal.dmg    1.9 MB
+dist/ChromeProfiles-1.0.2-universal.zip    1.7 MB
+dist/ChromeProfiles-1.0.2-universal.dmg    2.0 MB
 dist/SHA256SUMS.txt
 ```
 
 DMG 实测：
 
 ```
-$ hdiutil verify dist/ChromeProfiles-1.0.1-universal.dmg
+$ hdiutil verify dist/ChromeProfiles-1.0.2-universal.dmg
 checksum ... is VALID
 
 $ hdiutil attach … && ls /Volumes/…
@@ -132,7 +132,7 @@ ZIP 实测：解压后 `codesign --verify --deep --strict` 通过，无 `__MACOS
 
 | 指标 | 实测 |
 | --- | --- |
-| 常驻内存（physical footprint） | 5.9 MB |
+| 常驻内存（physical footprint） | 5.9 MB（Universal 1.0.2：约 6 MB） |
 | 空闲 CPU | 0.00% |
 | 后台轮询 / 网络请求 / 辅助进程 | 无 |
 

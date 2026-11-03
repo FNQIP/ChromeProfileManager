@@ -253,6 +253,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         case .refresh: return #selector(refresh(_:))
         case .openRoot: return #selector(openRoot(_:))
         case .preferences: return #selector(showPreferences(_:))
+        case .uninstall: return #selector(uninstall(_:))
         case .quit: return #selector(quit(_:))
         }
     }
@@ -496,6 +497,51 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             title: sender.title,
             message: (sender.toolTip ?? "") + "\n\n" + hint(for: sender.title)
         )
+    }
+
+    /// 卸载：把应用自身移入废纸篓并清除偏好设置。
+    ///
+    /// 明确不删除 `~/ChromeProfiles` 中的浏览数据——那是用户的 Chrome 数据，
+    /// 需要用户自己在访达中处理。
+    @objc private func uninstall(_ sender: Any?) {
+        let bundleURL = Bundle.main.bundleURL
+        let uninstaller = AppUninstaller()
+
+        do {
+            try uninstaller.validateApplication(at: bundleURL)
+        } catch {
+            Prompts.show(error: error)
+            return
+        }
+
+        let dataPath = (Preferences.defaultRootURL.path as NSString).abbreviatingWithTildeInPath
+
+        let confirmed = Prompts.confirmDestructive(
+            title: "卸载 Chrome Profiles？",
+            message: """
+            应用会被移到废纸篓，随后自动退出。
+
+            会被移走：\(bundleURL.path)
+            会被清除：本应用的偏好设置
+            不会被删除：\(dataPath) 中的浏览数据
+
+            同一台 Mac 上已启动的 Chrome 不受影响。
+            """,
+            confirmTitle: "移到废纸篓并退出"
+        )
+        guard confirmed else { return }
+
+        do {
+            try uninstaller.moveToTrash(bundleURL)
+        } catch {
+            Prompts.show(error: error)
+            return
+        }
+
+        let domain = Bundle.main.bundleIdentifier ?? "io.github.chromeprofiles"
+        uninstaller.clearPreferences(domain: domain)
+
+        NSApp.terminate(nil)
     }
 
     @objc private func quit(_ sender: Any?) {

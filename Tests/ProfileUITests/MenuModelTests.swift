@@ -147,12 +147,13 @@ struct MenuModelTests {
             return nil
         }
 
-        #expect(commands == [.newProfile, .refresh, .openRoot, .preferences, .quit])
+        #expect(commands == [.newProfile, .refresh, .openRoot, .preferences, .uninstall, .quit])
         #expect(MenuCommand.newProfile.keyEquivalent == "n")
         #expect(MenuCommand.refresh.keyEquivalent == "r")
         #expect(MenuCommand.preferences.keyEquivalent == ",")
         #expect(MenuCommand.quit.keyEquivalent == "q")
         #expect(MenuCommand.openRoot.keyEquivalent.isEmpty)
+        #expect(MenuCommand.uninstall.keyEquivalent.isEmpty)
     }
 
     @Test("列表以分隔线结束命令区")
@@ -169,5 +170,20 @@ struct MenuModelTests {
         #expect(firstSeparator < profileIndex)
         #expect(lastSeparator > profileIndex)
         #expect(model.rows.last == .command(.quit))
+    }
+
+    @Test("卸载入口被分隔线隔开，退出始终在最后")
+    func uninstallIsIsolatedAndQuitIsLast() {
+        let model = MenuModel.make(from: snapshot())
+
+        guard let uninstallIndex = model.rows.firstIndex(of: .command(.uninstall)) else {
+            Issue.record("菜单里没有卸载入口")
+            return
+        }
+
+        #expect(model.rows[uninstallIndex - 1] == .separator)
+        #expect(model.rows[uninstallIndex + 1] == .separator)
+        #expect(model.rows.last == .command(.quit))
+        #expect(MenuCommand.uninstall.title.contains("卸载"))
     }
 }
