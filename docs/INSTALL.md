@@ -82,12 +82,32 @@ xattr -dr com.apple.quarantine /Applications/ChromeProfiles.app
 
 ## 7. 卸载
 
-1. 菜单栏图标 →「退出 Chrome Profiles」
-2. 把应用从「应用程序」移到废纸篓
-3. 如需清除偏好设置：
+应用是纯菜单栏工具：没有后台服务、没有守护进程、不注册开机启动项，也没有系统级安装脚本。所以卸载就是「退出 + 删应用」，不残留任何东西在系统目录里。
+
+1. 点菜单栏图标 →「退出 Chrome Profiles」（已启动的 Chrome 不会被关闭）
+2. 把 `ChromeProfiles.app` 从「应用程序」移到废纸篓（用 DMG 装的记得先推出磁盘映像）
+3. 如需清除偏好设置（只有改过「配置根目录」才会有数据）：
 
 ```bash
 defaults delete io.github.chromeprofiles
 ```
 
-`~/ChromeProfiles/` 中的配置目录属于你的浏览数据，卸载应用**不会**删除它们；如不再需要请自行在 Finder 中处理。
+4. 如需一并删除浏览数据（**不可恢复，请先确认**）：
+
+```bash
+# 先退出使用这些目录的 Chrome 窗口，再把目录移到废纸篓
+open ~/ChromeProfiles            # 在 Finder 中确认内容
+```
+
+`~/ChromeProfiles/` 里的每个目录都是一份完整的 Chrome 用户数据（登录状态、Cookie、历史、扩展）。卸载应用**不会**删除它们；如果只想重装应用，保留这些目录即可，重装后配置列表会自动恢复。
+
+### 从源码构建的版本
+
+如果只是本地试用（例如 `~/Documents/.../ChromeProfiles/build/`）：
+
+```bash
+# 退出正在运行的实例
+pkill -f "ChromeProfiles.app/Contents/MacOS/ChromeProfiles"
+# 删掉整个仓库即可，.app 在 build/ 里，勾选 .gitignore 的产物不会被提交
+rm -rf ~/Documents/New/ChromeProfiles
+```
